@@ -1,0 +1,152 @@
+---
+title: 'Linear methods: principal components regression'
+author: "Jaewoo Cho"
+date: '2023-02-13'
+output: github_document
+---
+# Use the prostate cancer data.
+```{r}
+library('splines')        ## for 'bs'
+library('dplyr')          ## for 'select', 'filter', and others
+library('magrittr')       ## for '%<>%' operator
+library('glmnet')         ## for 'glmnet'
+
+prostate <- read.table(url('https://web.stanford.edu/~hastie/ElemStatLearn/datasets/prostate.data'))
+
+pairs(prostate)
+
+## split prostate into testing and training subsets
+prostate_train <- prostate %>%
+  filter(train == TRUE) %>% 
+  select(-train)
+
+prostate_test <- prostate %>%
+  filter(train == FALSE) %>% 
+  select(-train)
+
+```
+# Use the cor function to reproduce the correlations listed in HTF Table 3.1, page 50.
+```{r}
+cor(prostate)
+```
+
+
+# Treat lcavol as the outcome, and use all other variables in the data set as predictors.
+```{r}
+## predict lcavol consider all other predictors
+## lm fits using L2 loss
+fit <- lm(lcavol ~ ., data=prostate_train)
+summary(fit)
+
+```
+
+# With the training subset of the prostate data, train a least-squares regression model with all predictors using the lm function.
+```{r}
+fit <- lm(lcavol ~ ., data=prostate_train)
+coef(fit)
+residuals(fit)
+```
+
+#Use the testing subset to compute the test error (average squared-error loss) using the fitted least-squares regression model.
+```{r}
+## functions to compute testing/training error w/lm
+L2_loss <- function(y, yhat)
+  (y-yhat)^2
+error <- function(dat, fit, loss=L2_loss)
+  mean(loss(dat$lcavol, predict(fit, newdata=dat)))
+
+## train_error 
+error(prostate_train, fit)
+
+## testing error
+error(prostate_test, fit)
+```
+
+#Train a ridge regression model using the glmnet function, and tune the value of lambda (i.e., use guess and check to find the value of lambda that approximately minimizes the test error).
+```{r}
+
+## use glmnet to fit lasso
+## glmnet fits using penalized L2 loss
+## first create an input matrix and output vector
+form  <- lcavol ~  lweight + age + lbph + lcp + pgg45 + lpsa + svi + gleason
+x_inp <- model.matrix(form, data=prostate_train)
+y_out <- prostate_train$lcavol
+fit <- glmnet(x=x_inp, y=y_out, lambda=seq(0.5, 0, -0.05))
+print(fit$beta)
+
+## functions to compute testing/training error with glmnet
+error <- function(dat, fit, lam, form, loss=L2_loss) {
+  x_inp <- model.matrix(form, data=dat)
+  y_out <- dat$lcavol
+  y_hat <- predict(fit, newx=x_inp, s=lam)  ## see predict.elnet
+  mean(loss(y_out, y_hat))
+}
+
+## train_error at lambda=0
+error(prostate_train, fit, lam=0, form=form)
+
+## testing error at lambda=0
+error(prostate_test, fit, lam=0, form=form)
+
+## train_error at lambda=0.03
+error(prostate_train, fit, lam=0.05, form=form)
+
+## testing error at lambda=0.03
+error(prostate_test, fit, lam=0.05, form=form)
+```
+
+# Create a figure that shows the training and test error associated with ridge regression as a function of lambda
+```{r}
+
+## compute training and testing errors as function of lambda
+err_train_1 <- sapply(fit$lambda, function(lam) 
+  error(prostate_train, fit, lam, form))
+err_test_1 <- sapply(fit$lambda, function(lam) 
+  error(prostate_test, fit, lam, form))
+
+## plot test/train error
+plot(x=range(fit$lambda),
+     y=range(c(err_train_1, err_test_1)),
+     xlim=rev(range(fit$lambda)),
+     type='n',
+     xlab=expression(lambda),
+     ylab='train/test error')
+points(fit$lambda, err_train_1, pch=19, type='b', col='darkblue')
+points(fit$lambda, err_test_1, pch=19, type='b', col='darkred')
+legend('topright', c('train','test'), lty=1, pch=19,
+       col=c('darkblue','darkred'), bty='n')
+
+colnames(fit$beta) <- paste('lam =', fit$lambda)
+#print(fit$beta %>% as.matrix)
+```
+
+# Create a path diagram of the ridge regression analysis, similar to HTF Figure 3.8
+```{r}
+## use glmnet to fit lasso
+## glmnet fits using penalized L2 loss
+## first create an input matrix and output vector
+form  <- lcavol ~  lweight + age + lbph + lcp + pgg45 + lpsa + svi + gleason
+x_inp <- model.matrix(form, data=prostate_train)
+y_out <- prostate_train$lcavol
+fit <- glmnet(x=x_inp, y=y_out, lambda=seq(0.5, 0, -0.05))
+print(fit$beta)
+
+## plot path diagram
+plot(x=range(fit$lambda),
+     y=range(as.matrix(fit$beta)),
+     type='n',
+     xlab=expression(lambda),
+     ylab='Coefficients')
+for(i in 1:nrow(fit$beta)) {
+  points(x=fit$lambda, y=fit$beta[i,], pch=19, col='blue')
+  lines(x=fit$lambda, y=fit$beta[i,], col='blue')
+}
+text(x=0, y=fit$beta[,ncol(fit$beta)], 
+     labels=rownames(fit$beta),
+     xpd=NA, pos=4, srt=45)
+abline(h=0, lty=3, lwd=2)
+
+
+```
+
+
