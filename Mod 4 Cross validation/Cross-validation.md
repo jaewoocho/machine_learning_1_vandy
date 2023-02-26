@@ -1,0 +1,350 @@
+Cross validation
+================
+Jaewoo Cho
+
+# Goal: Understand and implement various ways to approximate test error.
+
+- In the ISLR book, read section 6.1.3 “Choosing the Optimal Model” and
+  section 5.1 “Cross-Validation”. Extend and convert the attached
+  effective-df-aic-bic-mcycle.R R script into an R markdown file that
+  accomplishes the following tasks.
+- Randomly split the mcycle data into training (75%) and validation
+  (25%) subsets.
+- Using the mcycle data, consider predicting the mean acceleration as a
+  function of time. Use the Nadaraya-Watson method with the k-NN kernel
+  function to create a series of prediction models by varying the tuning
+  parameter over a sequence of values. (hint: the script already
+  implements this)
+- With the squared-error loss function, compute and plot the training
+  error, AIC, BIC, and validation error (using the validation data) as
+  functions of the tuning parameter.
+- For each value of the tuning parameter, Perform 5-fold
+  cross-validation using the combined training and validation data. This
+  results in 5 estimates of test error per tuning parameter value.
+- Plot the CV-estimated test error (average of the five estimates from
+  each fold) as a function of the tuning parameter. Add vertical line
+  segments to the figure (using the segments function in R) that
+  represent one “standard error” of the CV-estimated test error
+  (standard deviation of the five estimates from each fold).
+- Interpret the resulting figures and select a suitable value for the
+  tuning parameter.
+
+``` r
+library('MASS') ## for 'mcycle'
+```
+
+    ## Warning: package 'MASS' was built under R version 4.1.2
+
+``` r
+library('manipulate') ## for 'manipulate'
+```
+
+``` r
+y <- mcycle$accel
+x <- matrix(mcycle$times, length(mcycle$times), 1)
+
+plot(x, y, xlab="Time (ms)", ylab="Acceleration (g)")
+```
+
+![](Cross-validation_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
+
+``` r
+## Epanechnikov kernel function
+## x  - n x p matrix of training inputs
+## x0 - 1 x p input where to make prediction
+## lambda - bandwidth (neighborhood size)
+kernel_epanechnikov <- function(x, x0, lambda=1) {
+  d <- function(t)
+    ifelse(t <= 1, 3/4*(1-t^2), 0)
+  z <- t(t(x) - x0)
+  d(sqrt(rowSums(z*z))/lambda)
+}
+
+## k-NN kernel function
+## x  - n x p matrix of training inputs
+## x0 - 1 x p input where to make prediction
+## k  - number of nearest neighbors
+kernel_k_nearest_neighbors <- function(x, x0, k=1) {
+  ## compute distance betwen each x and x0
+  z <- t(t(x) - x0)
+  d <- sqrt(rowSums(z*z))
+
+  ## initialize kernel weights to zero
+  w <- rep(0, length(d))
+  
+  ## set weight to 1 for k nearest neighbors
+  w[order(d)[1:k]] <- 1
+  
+  return(w)
+}
+
+## Make predictions using the NW method
+## y  - n x 1 vector of training outputs
+## x  - n x p matrix of training inputs
+## x0 - m x p matrix where to make predictions
+## kern  - kernel function to use
+## ... - arguments to pass to kernel function
+nadaraya_watson <- function(y, x, x0, kern, ...) {
+  k <- t(apply(x0, 1, function(x0_) {
+    k_ <- kern(x, x0_, ...)
+    k_/sum(k_)
+  }))
+  yhat <- drop(k %*% y)
+  attr(yhat, 'k') <- k
+  return(yhat)
+}
+
+## Helper function to view kernel (smoother) matrix
+matrix_image <- function(x) {
+  rot <- function(x) t(apply(x, 2, rev))
+  cls <- rev(gray.colors(20, end=1))
+  image(rot(x), col=cls, axes=FALSE)
+  xlb <- pretty(1:ncol(x))
+  xat <- (xlb-0.5)/ncol(x)
+  ylb <- pretty(1:nrow(x))
+  yat <- (ylb-0.5)/nrow(x)
+  axis(3, at=xat, labels=xlb)
+  axis(2, at=yat, labels=ylb)
+  mtext('Rows', 2, 3)
+  mtext('Columns', 3, 3)
+}
+
+## Compute effective df using NW method
+## y  - n x 1 vector of training outputs
+## x  - n x p matrix of training inputs
+## kern  - kernel function to use
+## ... - arguments to pass to kernel function
+effective_df <- function(y, x, kern, ...) {
+  y_hat <- nadaraya_watson(y, x, x,
+    kern=kern, ...)
+  sum(diag(attr(y_hat, 'k')))
+}
+
+## loss function
+## y    - train/test y
+## yhat - predictions at train/test x
+loss_squared_error <- function(y, yhat)
+  (y - yhat)^2
+
+## test/train error
+## y    - train/test y
+## yhat - predictions at train/test x
+## loss - loss function
+error <- function(y, yhat, loss=loss_squared_error)
+  mean(loss(y, yhat))
+
+## AIC
+## y    - training y
+## yhat - predictions at training x
+## d    - effective degrees of freedom
+aic <- function(y, yhat, d)
+  error(y, yhat) + 2/length(y)*d
+
+## BIC
+## y    - training y
+## yhat - predictions at training x
+## d    - effective degrees of freedom
+bic <- function(y, yhat, d)
+  error(y, yhat) + log(length(y))/length(y)*d
+
+
+## make predictions using NW method at training inputs
+y_hat <- nadaraya_watson(y, x, x,
+  kernel_epanechnikov, lambda=5)
+
+## view kernel (smoother) matrix
+matrix_image(attr(y_hat, 'k'))
+```
+
+![](Cross-validation_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+
+``` r
+## compute effective degrees of freedom
+edf <- effective_df(y, x, kernel_epanechnikov, lambda=5)
+aic(y, y_hat, edf)
+```
+
+    ## [1] 677.1742
+
+``` r
+bic(y, y_hat, edf)
+```
+
+    ## [1] 677.3629
+
+``` r
+## create a grid of inputs 
+x_plot <- matrix(seq(min(x),max(x),length.out=100),100,1)
+
+## make predictions using NW method at each of grid points
+y_hat_plot <- nadaraya_watson(y, x, x_plot,
+  kernel_epanechnikov, lambda=1)
+
+## plot predictions
+plot(x, y, xlab="Time (ms)", ylab="Acceleration (g)")
+lines(x_plot, y_hat_plot, col="#882255", lwd=2) 
+```
+
+![](Cross-validation_files/figure-gfm/unnamed-chunk-3-2.png)<!-- -->
+
+``` r
+## how does k affect shape of predictor and eff. df using k-nn kernel ?
+# manipulate({
+#   ## make predictions using NW method at training inputs
+#   y_hat <- nadaraya_watson(y, x, x,
+#     kern=kernel_k_nearest_neighbors, k=k_slider)
+#   edf <- effective_df(y, x, 
+#     kern=kernel_k_nearest_neighbors, k=k_slider)
+#   aic_ <- aic(y, y_hat, edf)
+#   bic_ <- bic(y, y_hat, edf)
+#   y_hat_plot <- nadaraya_watson(y, x, x_plot,
+#     kern=kernel_k_nearest_neighbors, k=k_slider)
+#   plot(x, y, xlab="Time (ms)", ylab="Acceleration (g)")
+#   legend('topright', legend = c(
+#     paste0('eff. df = ', round(edf,1)),
+#     paste0('aic = ', round(aic_, 1)),
+#     paste0('bic = ', round(bic_, 1))),
+#     bty='n')
+#   lines(x_plot, y_hat_plot, col="#882255", lwd=2) 
+# }, k_slider=slider(1, 10, initial=3, step=1))
+```
+
+``` r
+# Randomly split the mcycle data into training (75%) and validation (25%) subsets
+train_idx <- sample(nrow(mcycle), round(0.75 * nrow(mcycle)))
+train_data <- mcycle[train_idx, ]
+validation_data <- mcycle[-train_idx, ]
+```
+
+# Using the mcycle data, consider predicting the mean acceleration as a function of time. Use the Nadaraya-Watson method with the k-NN kernel function to create a series of prediction models by varying the tuning parameter over a sequence of values. (hint: the script already implements this)
+
+``` r
+## make predictions using NW method at training inputs
+y_hat <- nadaraya_watson(y, x, x,
+  kernel_epanechnikov, lambda=5)
+
+## view kernel (smoother) matrix
+matrix_image(attr(y_hat, 'k'))
+```
+
+![](Cross-validation_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+
+``` r
+## create a grid of inputs 
+x_plot <- matrix(seq(min(x),max(x),length.out=100),100,1)
+
+## make predictions using NW method at each of grid points
+y_hat_plot <- nadaraya_watson(y, x, x_plot,
+  kernel_epanechnikov, lambda=1)
+
+## plot predictions
+plot(x, y, xlab="Time (ms)", ylab="Acceleration (g)")
+lines(x_plot, y_hat_plot, col="#882255", lwd=2) 
+```
+
+![](Cross-validation_files/figure-gfm/unnamed-chunk-5-2.png)<!-- -->
+
+# With the squared-error loss function, compute and plot the training error, AIC, BIC, and validation error (using the validation data) as functions of the tuning parameter.
+
+``` r
+## compute effective degrees of freedom
+edf <- effective_df(y, x, kernel_epanechnikov, lambda=5)
+aic(y, y_hat, edf)
+```
+
+    ## [1] 677.1742
+
+``` r
+bic(y, y_hat, edf)
+```
+
+    ## [1] 677.3629
+
+``` r
+#manipulate({
+   ## make predictions using NW method at training inputs
+#   y_hat <- nadaraya_watson(y, x, x,
+#     kern=kernel_k_nearest_neighbors, k=k_slider)
+#   edf <- effective_df(y, x, 
+#     kern=kernel_k_nearest_neighbors, k=k_slider)
+#   aic_ <- aic(y, y_hat, edf)
+#   bic_ <- bic(y, y_hat, edf)
+#   y_hat_plot <- nadaraya_watson(y, x, x_plot,
+#     kern=kernel_k_nearest_neighbors, k=k_slider)
+#   plot(x, y, xlab="Time (ms)", ylab="Acceleration (g)")
+#   legend('topright', legend = c(
+#     paste0('eff. df = ', round(edf,1)),
+#     paste0('aic = ', round(aic_, 1)),
+#     paste0('bic = ', round(bic_, 1))),
+#     bty='n')
+#   lines(x_plot, y_hat_plot, col="#882255", lwd=2) 
+# }, k_slider=slider(1, 10, initial=3, step=1))
+```
+
+# For each value of the tuning parameter, Perform 5-fold cross-validation using the combined training and validation data. This results in 5 estimates of test error per tuning parameter value.
+
+``` r
+library(boot)
+
+tuning_params <- seq(0.1, 10, by=0.1)
+test_errors <- matrix(NA, nrow=6, ncol=length(tuning_params)) ## change nrow to 6
+
+for (i in 1:length(tuning_params)) {
+  lambda <- tuning_params[i]
+  
+  ## combine training and validation data
+  train_validation_data <- rbind(train_data, validation_data)
+  
+  ## define the glm model
+  model <- glm(accel ~ times, data=train_validation_data)
+  
+  ## perform 5-fold cross-validation
+  cv_results <- cv.glm(train_validation_data, model, K=5)
+  
+  ## extract the mean test error from the cv.glm output
+  test_errors[,i] <- cv_results$delta[1] ## use only the mean test error
+}
+
+## take the average of the test errors across the 5 folds for each tuning parameter
+mean_test_errors <- apply(test_errors, 2, mean)
+
+mean_test_errors
+```
+
+    ##   [1] 2199.764 2171.045 2163.156 2123.173 2157.523 2150.499 2141.506 2152.370
+    ##   [9] 2147.218 2127.519 2196.568 2134.615 2156.110 2122.521 2150.662 2158.205
+    ##  [17] 2143.285 2173.923 2178.338 2135.006 2175.092 2203.662 2135.993 2129.722
+    ##  [25] 2216.334 2128.891 2161.840 2169.198 2220.446 2187.035 2180.239 2176.899
+    ##  [33] 2158.836 2143.936 2144.875 2150.204 2193.577 2166.178 2257.236 2209.006
+    ##  [41] 2162.591 2140.142 2148.273 2184.632 2153.857 2143.907 2183.105 2146.754
+    ##  [49] 2173.211 2160.234 2165.708 2211.144 2149.694 2162.795 2159.846 2157.385
+    ##  [57] 2187.681 2146.216 2152.423 2157.155 2232.873 2156.379 2155.893 2140.561
+    ##  [65] 2215.461 2197.522 2147.459 2180.859 2155.386 2149.433 2170.116 2143.041
+    ##  [73] 2126.252 2132.968 2208.790 2158.013 2229.432 2162.464 2168.704 2139.292
+    ##  [81] 2152.316 2150.560 2166.011 2126.581 2218.473 2167.038 2202.099 2171.350
+    ##  [89] 2152.735 2127.014 2133.775 2145.982 2213.854 2193.910 2157.123 2193.736
+    ##  [97] 2186.269 2139.836 2140.557 2155.311
+
+# Plot the CV-estimated test error (average of the five estimates from each fold) as a function of the tuning parameter. Add vertical line segments to the figure (using the segments function in R) that represent one “standard error” of the CV-estimated test error (standard deviation of the five estimates from each fold).
+
+``` r
+## calculate the standard errors of the test errors across the 5 folds for each tuning parameter
+se_test_errors <- apply(test_errors, 2, sd) / sqrt(5)
+
+## plot the mean test errors and standard errors as error bars
+plot(tuning_params, mean_test_errors, type='l', xlab='Tuning parameter', ylab='Test error')
+#axis(1, at=seq(0.1, 10, by=0.1))
+segments(tuning_params, mean_test_errors - se_test_errors, tuning_params, mean_test_errors + se_test_errors, lwd=2)
+abline(h=mean(mean_test_errors) + mean(se_test_errors), lty=1, col="red")
+```
+
+![](Cross-validation_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
+
+# Interpret the resulting figures and select a suitable value for the tuning parameter.
+
+- The resulting figure shows the testing error based on the tuning
+  parameter sequece from 0 to 10 by 0.1. On a moderate scale, the test
+  error seems to decrease more as the tuning parameter increases from
+  4.5. Based on the red abline, the suitable value for the tuning
+  parameter would be roughly around 5 \~ 6, 8 \~10. Specifically
+  suitable values could be 5.5, 8, and 6.6
