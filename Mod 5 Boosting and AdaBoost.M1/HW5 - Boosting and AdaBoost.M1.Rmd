@@ -1,0 +1,291 @@
+---
+title: 'Homework 5: Boosting and AdaBoost.M1'
+author: "Jaewoo Cho"
+output: github_document
+Date: April 3, 2023
+---
+# Goal: Understand and implement a random forest classifier.
+
+## 1. Using the “vowel.train” data, develop a random forest (e.g., using the "randomForest" package) or gradient boosted classifier for the vowel data.
+## 2. Fit a random forest or gradient boosted model to the “vowel.train” data using all of the 11 features using the default values of the tuning parameters.
+## 3.Use 5-fold CV to tune the number of variables randomly sampled as candidates at each split if using random forest, or the ensemble size if using gradient boosting.
+## 4. With the tuned model, make predictions using the majority vote method, and compute the misclassification rate using the ‘vowel.test’ data.
+
+## Libraries
+```{r}
+library('magrittr')
+library('dplyr')
+library('rpart')
+library('partykit')
+library('utils')
+library('manipulate')
+library('randomForest')
+library('xgboost')
+```
+## Import the training data
+```{r}
+# Load the data from the URL
+url <- "https://hastie.su.domains/ElemStatLearn/datasets/vowel.train"
+train_vowel <- read.table(url, header = TRUE)
+
+# Create a sample train_data frame
+train_data <- train_vowel
+# Split the comma-separated values into separate columns
+train_data <- data.frame(do.call("rbind", strsplit(as.character(train_data[,1]), ",")))
+
+# Rename the columns
+colnames(train_data) <- c("row.names", "y", "x.1", "x.2", "x.3", "x.4", "x.5", "x.6", "x.7", "x.8", "x.9", "x.10")
+
+# Convert the columns to the appropriate train_data types
+train_data$row.names <- as.numeric(train_data$row.names)
+train_data$y <- as.numeric(train_data$y)
+train_data$x.1 <- as.numeric(train_data$x.1)
+train_data$x.2 <- as.numeric(train_data$x.2)
+train_data$x.3 <- as.numeric(train_data$x.3)
+train_data$x.4 <- as.numeric(train_data$x.4)
+train_data$x.5 <- as.numeric(train_data$x.5)
+train_data$x.6 <- as.numeric(train_data$x.6)
+train_data$x.7 <- as.numeric(train_data$x.7)
+train_data$x.8 <- as.numeric(train_data$x.8)
+train_data$x.9 <- as.numeric(train_data$x.9)
+train_data$x.10 <- as.numeric(train_data$x.10)
+
+# View the resulting train_data frame
+# train_data
+```
+
+## Import the testing data
+```{r}
+# Load the data from the URL
+url <- "https://hastie.su.domains/ElemStatLearn/datasets/vowel.test"
+test_vowel <- read.table(url, header = TRUE)
+
+# Create a sample test_data frame
+test_data <- test_vowel
+# Split the comma-separated values into separate columns
+test_data <- data.frame(do.call("rbind", strsplit(as.character(test_data[,1]), ",")))
+
+# Rename the columns
+colnames(test_data) <- c("row.names", "y", "x.1", "x.2", "x.3", "x.4", "x.5", "x.6", "x.7", "x.8", "x.9", "x.10")
+
+# Convert the columns to the appropriate test_data types
+test_data$row.names <- as.numeric(test_data$row.names)
+test_data$y <- as.numeric(test_data$y)
+test_data$x.1 <- as.numeric(test_data$x.1)
+test_data$x.2 <- as.numeric(test_data$x.2)
+test_data$x.3 <- as.numeric(test_data$x.3)
+test_data$x.4 <- as.numeric(test_data$x.4)
+test_data$x.5 <- as.numeric(test_data$x.5)
+test_data$x.6 <- as.numeric(test_data$x.6)
+test_data$x.7 <- as.numeric(test_data$x.7)
+test_data$x.8 <- as.numeric(test_data$x.8)
+test_data$x.9 <- as.numeric(test_data$x.9)
+test_data$x.10 <- as.numeric(test_data$x.10)
+
+# View the resulting test_data frame
+# test_data
+```
+
+
+## Loss functions
+```{r}
+####################
+## loss functions ##
+####################
+
+## Huber loss
+loss_huber <- function(f, y, delta=1)
+  ifelse(abs(y-f) <= delta,
+    0.5*(y-f)^2, delta*(abs(y-f) - 0.5*delta))
+
+## squared error loss
+loss_square <- function(f, y)
+  (y-f)^2
+
+## absolute error loss
+loss_absolute <- function(f, y)
+  abs(y-f)
+
+## tilted absolute error loss
+## tau - target quantile for prediction
+loss_tilted <- function(f, y, tau=0.75)
+  ifelse(y-f > 0, (y-f) * tau, (y-f) * (tau - 1))
+
+## plot loss as functions of residual (y-f) 
+curve(loss_square(0, x), from=-2, to=2,
+      xlab='y - f', ylab='loss')
+curve(loss_absolute(0, x), from=-2, to=2, add=T, col=2)
+curve(loss_tilted(0, x, 0.75), from=-2, to=2, add=T, col=3)
+curve(loss_huber(0, x), from=-2, to=2, add=T, col=4)
+legend('top', c('squared','absolute','tilted 0.75','Huber'),
+       col=1:4, lty=1, bty='n')
+
+## constant prediction for given loss 
+## this applies decision theory predict the
+## value 'f' that minimizes the sum of loss
+## for loss=loss_square, this returns mean(y)
+## for loss=loss_absolute, this returns quantile(y, probs=0.5)
+## for loss=loss_huber, this returns some other value
+const_pred <- function(y, loss=loss_huber,
+                       limits=c(-1e10,1e10), ...) {
+  sum_loss <- function(f) sum(loss(f, y, ...))
+  optimize(sum_loss, interval=limits)$minimum
+}
+
+## const_pred examples
+y1 <- rexp(1000) ## mean = 1.000, median = 0.693
+mean(y1)
+const_pred(y1, loss=loss_square)
+median(y1)
+const_pred(y1, loss=loss_absolute)
+const_pred(y1, loss=loss_huber)
+
+###############################
+## weak learner for boosting ##
+###############################
+
+## fit a stump (using squared error loss: method='anova')
+stump <- function(dat, frm, maxdepth=1) {
+  rpart(formula=frm, data=dat, method='anova',
+        minsplit=2,minbucket=1,maxdepth=maxdepth,
+        cp=0,maxcompete=0,maxsurrogate=0,
+        usesurrogate=0,xval=0) %>%
+    ## convert to constparty to make easier to 
+    ## manipulate predictions from this model
+    as.constparty
+}
+```
+
+## Random Forest Model
+```{r}
+# Fit a random forest model
+rf_model <- randomForest(y ~ ., data = train_data)
+
+# View the model summary
+rf_model
+```
+
+```{r}
+library(randomForest)
+library(caret)
+
+# Define the tuning grid
+tuneGrid <- expand.grid(mtry = seq(1, ncol(train_data) - 1, by = 2))
+
+# Set up the cross-validation
+control <- trainControl(method = "cv", number = 5)
+
+# Train the random forest with cross-validation
+set.seed(123)
+rf <- train(x = train_data[, -1], y = train_data[, 1],
+            method = "rf", ntree = 500,
+            tuneGrid = tuneGrid,
+            trControl = control)
+
+# Print the results
+print(rf)
+
+# Plot the results
+plot(rf)
+
+```
+
+```{r}
+library(randomForest)
+library(caret)
+
+# load the vowel.train data
+# train_data
+
+# 1. develop a random forest for the vowel data
+rf_vowel <- randomForest(formula = y ~ ., data = train_data)
+
+# 2. fit a random forest model using all features with default tuning parameters
+rf_default <- randomForest(formula = y ~ ., data = train_data)
+
+# 3. use 5-fold CV to tune the number of variables randomly sampled as candidates at each split
+tuneGrid <- expand.grid(mtry = seq(1, ncol(train_data) - 1, by = 2))
+control <- trainControl(method = "cv", number = 5)
+rf_tuned <- train(x = train_data[, -1], y = train_data[, 1], 
+                  method = "rf", ntree = 500, tuneGrid = tuneGrid,
+                  trControl = control)
+
+# 4. make predictions using the majority vote method, and compute the misclassification rate
+# load the vowel.test data
+# test_data
+
+# predict the class for the vowel.test data using the tuned random forest model
+y_pred <- predict(rf_tuned, newdata = test_data[, -1], type = "raw")
+
+# compute the misclassification rate
+misclassification_rate <- mean(y_pred != test_data[, 1])
+misclassification_rate
+```
+
+
+--- 
+---
+---
+
+# XGboost model
+```{r}
+# Split the data into features and target
+train_X <- train_data[, 3:12]
+train_y <- train_data$y
+
+# Fit a gradient boosted model with default tuning parameters
+model <- xgboost(data = as.matrix(train_X), label = train_y, nrounds = 50)
+```
+
+```{r}
+library(caret)
+library(xgboost)
+
+# Split the data into features and target
+train_X <- train_data[, 3:12]
+train_y <- train_data$y
+
+# Define the tuning parameter grid
+tune_grid <- expand.grid(nrounds = c(50, 100),
+                         max_depth = c(3, 4),
+                         eta = c(0.01, 0.05),
+                         gamma = c(0, 0.1),
+                         colsample_bytree = c(0.5, 0.8),
+                         min_child_weight = c(1, 5),
+                         subsample = seq(0.5, 1, by = 0.1))
+
+# Set up the cross-validation control
+cv_ctrl <- trainControl(method = "cv", number = 5)
+
+# Perform the tuning using cross-validation
+model_tune <- train(x = as.matrix(train_X),
+                    y = train_y,
+                    method = "xgbTree",
+                    tuneGrid = tune_grid,
+                    trControl = cv_ctrl)
+
+# Print the optimal tuning parameter
+print(model_tune$bestTune)
+model_tune
+
+```
+
+```{r}
+# Make predictions on test data using the tuned model
+test_X <- test_data[, 3:12]
+test_y_pred <- predict(model_tune, newdata = as.matrix(test_X))
+
+# Convert test_y_pred to a numeric matrix
+test_y_pred_num <- as.matrix(test_y_pred)
+
+# Use majority vote to combine the predictions
+test_y_pred_majority <- ifelse(rowSums(test_y_pred_num == "0") >= 3, "0", "1")
+
+
+# Compute misclassification rate
+test_y <- test_data$y
+misclassification_rate <- sum(test_y != test_y_pred_majority) / length(test_y)
+print(paste0("Misclassification rate: ", misclassification_rate))
+
+```
+
